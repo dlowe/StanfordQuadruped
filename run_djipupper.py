@@ -9,6 +9,7 @@ from djipupper.Config import Configuration
 from djipupper.Kinematics import four_legs_inverse_kinematics
 import argparse
 
+import atexit
 import datetime
 import os
 import msgpack
@@ -63,48 +64,55 @@ def main(FLAGS):
         
     print("Waiting for L1 to activate robot.")
 
-    last_loop = time.time()
-    try:
-        while True:
-            if state.activation == 0:
-                time.sleep(0.02)
-                joystick_interface.set_color(config.ps4_deactivated_color)
-                command = joystick_interface.get_command(state)
-                if command.activate_event == 1:
-                    print("Robot activated.")
-                    joystick_interface.set_color(config.ps4_color)
-                    time.sleep(0.1)
-                    hardware_interface.serial_handle.reset_input_buffer()
-                    time.sleep(0.1)
-                    hardware_interface.activate()
-                    time.sleep(0.1)
-                    state.activation = 1
-                    continue
-            elif state.activation == 1:
-                now = time.time()
-                if FLAGS.log:
-                    any_data = hardware_interface.log_incoming_data(log_file)
-                    if any_data:
-                      print(any_data['ts'])
-                if now - last_loop >= config.dt:
-                    command = joystick_interface.get_command(state)
-                    if command.deactivate_event == 1:
-                        print("Deactivating Robot")
-                        print("Waiting for L1 to activate robot.")
-                        time.sleep(0.1)
-                        hardware_interface.deactivate()
-                        time.sleep(0.1)
-                        state.activation = 0
-                        continue
-                    controller.run(state, command)
-                    hardware_interface.set_cartesian_positions(
-                        state.final_foot_locations
-                    )
-                    last_loop = now
-    except KeyboardInterrupt:
+    def cleanup():
+        print("Exiting (cleaning up, first.)")
+        hardware_interface.deactivate()
         if FLAGS.log:
             print("Closing log file")
             log_file.close()
+    atexit.register(cleanup)
+
+    last_loop = time.time()
+    while True:
+        if state.activation == 0:
+            time.sleep(0.02)
+            joystick_interface.set_color(config.ps4_deactivated_color)
+            command = joystick_interface.get_command(state)
+            if command.exit_event:
+                break
+            if command.activate_event == 1:
+                print("Robot activated.")
+                joystick_interface.set_color(config.ps4_color)
+                time.sleep(0.1)
+                hardware_interface.serial_handle.reset_input_buffer()
+                time.sleep(0.1)
+                hardware_interface.activate()
+                time.sleep(0.1)
+                state.activation = 1
+                continue
+        elif state.activation == 1:
+            now = time.time()
+            if FLAGS.log:
+                any_data = hardware_interface.log_incoming_data(log_file)
+                if any_data:
+                  print(any_data['ts'])
+            if now - last_loop >= config.dt:
+                command = joystick_interface.get_command(state)
+                if command.exit_event:
+                    break
+                if command.deactivate_event == 1:
+                    print("Deactivating Robot")
+                    print("Waiting for L1 to activate robot.")
+                    time.sleep(0.1)
+                    hardware_interface.deactivate()
+                    time.sleep(0.1)
+                    state.activation = 0
+                    continue
+                controller.run(state, command)
+                hardware_interface.set_cartesian_positions(
+                    state.final_foot_locations
+                )
+                last_loop = now
 
 
 def summarize_config(config):
